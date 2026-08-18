@@ -35,12 +35,20 @@ build/
 # Environment / secrets
 .env
 .env.*
+application.properties
 application-local.properties
 application-dev.properties
 application-prod.properties
+application-*.properties
 secrets.*
 *.pem
 *.key
+*.crt
+*.cer
+
+# Runtime / local config
+src/main/resources/application.properties
+src/main/resources/application-*.properties
 
 # Logs
 *.log
