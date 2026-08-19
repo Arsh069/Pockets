@@ -27,4 +27,12 @@ public interface PocketService {
     void deductBalance(Long pocketId, BigDecimal amount);
 
     void resetBalance(Long pocketId);
+
+    void resetBalance(Long pocketId, boolean ignoreOverrideProtection);
+
+    PocketResponse resetBalanceForUser(Long pocketId, Long userId);
+
+    List<PocketResponse> resetAllPocketsForUser(Long userId);
+
+    PocketResponse overrideBalance(Long pocketId, Long userId, BigDecimal newBalance);
 }

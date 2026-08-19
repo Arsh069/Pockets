@@ -12,7 +12,9 @@ public record PocketResponse(
     BigDecimal monthlyLimit,
     BigDecimal currentBalance,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    Instant lastResetAt,
+    Instant lastManualOverrideAt
 ) {
     public static PocketResponse fromEntity(Pocket pocket) {
         return new PocketResponse(
@@ -22,7 +24,9 @@ public record PocketResponse(
             pocket.getMonthlyLimit(),
             pocket.getCurrentBalance(),
             pocket.getCreatedAt(),
-            pocket.getUpdatedAt()
+            pocket.getUpdatedAt(),
+            pocket.getLastResetAt(),
+            pocket.getLastManualOverrideAt()
         );
     }
 }

@@ -42,6 +42,12 @@ public class Pocket {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Column(name = "last_reset_at")
+    private Instant lastResetAt;
+
+    @Column(name = "last_manual_override_at")
+    private Instant lastManualOverrideAt;
+
     public Pocket() {
     }
 
@@ -123,5 +129,21 @@ public class Pocket {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public Instant getLastResetAt() {
+        return lastResetAt;
+    }
+
+    public void setLastResetAt(Instant lastResetAt) {
+        this.lastResetAt = lastResetAt;
+    }
+
+    public Instant getLastManualOverrideAt() {
+        return lastManualOverrideAt;
+    }
+
+    public void setLastManualOverrideAt(Instant lastManualOverrideAt) {
+        this.lastManualOverrideAt = lastManualOverrideAt;
     }
 }
