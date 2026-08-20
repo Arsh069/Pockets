@@ -379,4 +379,218 @@ class FullRegressionIntegrationTest {
         assertEquals(0, pocketRepository.findByUserId(userA.userId()).size());
         assertEquals(0, transactionRepository.findAllFiltered(null, userA.userId()).size());
     }
+
+    @Test
+    @DisplayName("Part A: Manual Purchase Logging with dual-balance columns, negative balance, and displayBalance")
+    void testManualPurchaseLoggingDualBalance() throws Exception {
+        AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
+        AuthResponse userB = registerUser("9876543211", "Password@123", "User B", 15);
+        String tokenA = "Bearer " + userA.accessToken();
+        String tokenB = "Bearer " + userB.accessToken();
+
+        // 1. Create pocket with limit 5000
+        CreatePocketRequest createPocket = new CreatePocketRequest("Snacks", new BigDecimal("5000.00"));
+        MvcResult pocketResult = mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createPocket)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.currentBalance").value(0.0))
+                .andExpect(jsonPath("$.manualCurrentBalance").value(0.0))
+                .andExpect(jsonPath("$.displayBalance").value(0.0))
+                .andReturn();
+        PocketResponse pocket = objectMapper.readValue(pocketResult.getResponse().getContentAsString(), PocketResponse.class);
+
+        // 2. Override balance to 1000.00 -> both columns update in sync
+        OverrideBalanceRequest overrideReq = new OverrideBalanceRequest(new BigDecimal("1000.00"));
+        mockMvc.perform(patch("/api/pockets/" + pocket.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(overrideReq)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentBalance").value(1000.0))
+                .andExpect(jsonPath("$.manualCurrentBalance").value(1000.0))
+                .andExpect(jsonPath("$.displayBalance").value(1000.0));
+
+        // 3. User B cannot log purchase on User A's pocket -> 404
+        com.marsh.pockets.transaction.dto.LogPurchaseRequest logReqUserB =
+                new com.marsh.pockets.transaction.dto.LogPurchaseRequest(pocket.id(), new BigDecimal("100.00"), "Unauthorized");
+        mockMvc.perform(post("/api/transactions/log")
+                        .header("Authorization", tokenB)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(logReqUserB)))
+                .andExpect(status().isNotFound());
+
+        // 4. Log manual purchase of 400.00 -> currentBalance = 600, manualCurrentBalance = 600, displayBalance = 600
+        com.marsh.pockets.transaction.dto.LogPurchaseRequest logReq1 =
+                new com.marsh.pockets.transaction.dto.LogPurchaseRequest(pocket.id(), new BigDecimal("400.00"), "Coffee & snacks");
+        mockMvc.perform(post("/api/transactions/log")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(logReq1)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.source").value("MANUAL_LOG"))
+                .andExpect(jsonPath("$.status").value("CONFIRMED"))
+                .andExpect(jsonPath("$.amount").value(400.0));
+
+        mockMvc.perform(get("/api/pockets/" + pocket.id())
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentBalance").value(600.0))
+                .andExpect(jsonPath("$.manualCurrentBalance").value(600.0))
+                .andExpect(jsonPath("$.displayBalance").value(600.0));
+
+        // 5. Log manual purchase of 800.00 (exceeding 600) -> currentBalance clamped at 0, manualCurrentBalance becomes -200, displayBalance becomes -200
+        com.marsh.pockets.transaction.dto.LogPurchaseRequest logReq2 =
+                new com.marsh.pockets.transaction.dto.LogPurchaseRequest(pocket.id(), new BigDecimal("800.00"), "Big dinner");
+        mockMvc.perform(post("/api/transactions/log")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(logReq2)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.source").value("MANUAL_LOG"))
+                .andExpect(jsonPath("$.status").value("CONFIRMED"));
+
+        mockMvc.perform(get("/api/pockets/" + pocket.id())
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentBalance").value(0.0))
+                .andExpect(jsonPath("$.manualCurrentBalance").value(-200.0))
+                .andExpect(jsonPath("$.displayBalance").value(-200.0));
+    }
+
+    @Test
+    @DisplayName("Part B: UPI Deep-Link Generation with encoding, validation, and error states")
+    void testUpiDeepLinkGeneration() throws Exception {
+        AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
+        AuthResponse userB = registerUser("9876543211", "Password@123", "User B", 15);
+        String tokenA = "Bearer " + userA.accessToken();
+        String tokenB = "Bearer " + userB.accessToken();
+
+        // Create and fund pocket
+        CreatePocketRequest createPocket = new CreatePocketRequest("Groceries", new BigDecimal("5000.00"));
+        MvcResult pocketResult = mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createPocket)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        PocketResponse pocket = objectMapper.readValue(pocketResult.getResponse().getContentAsString(), PocketResponse.class);
+
+        OverrideBalanceRequest overrideReq = new OverrideBalanceRequest(new BigDecimal("2000.00"));
+        mockMvc.perform(patch("/api/pockets/" + pocket.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(overrideReq)))
+                .andExpect(status().isOk());
+
+        // Create PENDING IN_APP transaction with payee UPI and note
+        CreateTransactionRequest txReq = new CreateTransactionRequest(
+                pocket.id(),
+                new BigDecimal("450.50"),
+                "store@okaxis",
+                "Weekly fruit & vegetables",
+                UUID.randomUUID().toString()
+        );
+        MvcResult txResult = mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(txReq)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        TransactionResponse tx = objectMapper.readValue(txResult.getResponse().getContentAsString(), TransactionResponse.class);
+
+        // 1. Successful UPI deep link generation
+        com.marsh.pockets.payment.dto.GenerateLinkRequest linkReq =
+                new com.marsh.pockets.payment.dto.GenerateLinkRequest(tx.id());
+        MvcResult linkResult = mockMvc.perform(post("/api/payments/generate-link")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(linkReq)))
+                .andExpect(status().isOk())
+                .andReturn();
+        com.marsh.pockets.payment.dto.GenerateLinkResponse linkResponse =
+                objectMapper.readValue(linkResult.getResponse().getContentAsString(), com.marsh.pockets.payment.dto.GenerateLinkResponse.class);
+
+        assertNotNull(linkResponse.upiDeepLink());
+        assertTrue(linkResponse.upiDeepLink().startsWith("upi://pay?pa=store%40okaxis&am=450.50"));
+        assertTrue(linkResponse.upiDeepLink().contains("cu=INR"));
+        assertTrue(linkResponse.upiDeepLink().contains("tr=" + tx.id()));
+
+        // 2. User B cannot generate link for User A's transaction -> 404
+        mockMvc.perform(post("/api/payments/generate-link")
+                        .header("Authorization", tokenB)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(linkReq)))
+                .andExpect(status().isNotFound());
+
+        // 3. Confirm transaction tx -> Cannot generate link for CONFIRMED transaction -> 409
+        mockMvc.perform(post("/api/transactions/" + tx.id() + "/confirm")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/payments/generate-link")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(linkReq)))
+                .andExpect(status().isConflict());
+
+        // 4. Manual purchase transaction cannot generate UPI link -> 409
+        com.marsh.pockets.transaction.dto.LogPurchaseRequest manualReq =
+                new com.marsh.pockets.transaction.dto.LogPurchaseRequest(pocket.id(), new BigDecimal("100.00"), "Manual cash");
+        MvcResult manualResult = mockMvc.perform(post("/api/transactions/log")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(manualReq)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        TransactionResponse manualTx = objectMapper.readValue(manualResult.getResponse().getContentAsString(), TransactionResponse.class);
+
+        com.marsh.pockets.payment.dto.GenerateLinkRequest manualLinkReq =
+                new com.marsh.pockets.payment.dto.GenerateLinkRequest(manualTx.id());
+        mockMvc.perform(post("/api/payments/generate-link")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(manualLinkReq)))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("JPA Optimistic Locking: Concurrent modifications trigger 409 Conflict with clear message")
+    void testOptimisticLockingFailureOnConcurrentUpdate() throws Exception {
+        AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
+        String tokenA = "Bearer " + userA.accessToken();
+
+        // Create pocket
+        CreatePocketRequest createPocket = new CreatePocketRequest("Entertainment", new BigDecimal("5000.00"));
+        MvcResult pocketResult = mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createPocket)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        PocketResponse pocket = objectMapper.readValue(pocketResult.getResponse().getContentAsString(), PocketResponse.class);
+
+        // Fetch stale entity at version 0
+        com.marsh.pockets.pocket.entity.Pocket stalePocket = pocketRepository.findById(pocket.id()).orElseThrow();
+        assertEquals(0L, stalePocket.getVersion());
+
+        // Update pocket via API (increments version in DB to 1)
+        OverrideBalanceRequest overrideReq = new OverrideBalanceRequest(new BigDecimal("3000.00"));
+        mockMvc.perform(patch("/api/pockets/" + pocket.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(overrideReq)))
+                .andExpect(status().isOk());
+
+        com.marsh.pockets.pocket.entity.Pocket updatedPocket = pocketRepository.findById(pocket.id()).orElseThrow();
+        assertEquals(1L, updatedPocket.getVersion());
+
+        // Attempting to save the stale entity (version 0) fails with OptimisticLockingFailureException
+        stalePocket.setCurrentBalance(new BigDecimal("1000.00"));
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.dao.OptimisticLockingFailureException.class,
+                () -> pocketRepository.saveAndFlush(stalePocket)
+        );
+    }
 }

@@ -11,18 +11,26 @@ public record PocketResponse(
     String name,
     BigDecimal monthlyLimit,
     BigDecimal currentBalance,
+    BigDecimal manualCurrentBalance,
+    BigDecimal displayBalance,
     Instant createdAt,
     Instant updatedAt,
     Instant lastResetAt,
     Instant lastManualOverrideAt
 ) {
     public static PocketResponse fromEntity(Pocket pocket) {
+        BigDecimal current = pocket.getCurrentBalance();
+        BigDecimal manual = pocket.getManualCurrentBalance();
+        BigDecimal display = (current != null && manual != null) ? current.min(manual) : current;
+
         return new PocketResponse(
             pocket.getId(),
             pocket.getUserId(),
             pocket.getName(),
             pocket.getMonthlyLimit(),
-            pocket.getCurrentBalance(),
+            current,
+            manual,
+            display,
             pocket.getCreatedAt(),
             pocket.getUpdatedAt(),
             pocket.getLastResetAt(),

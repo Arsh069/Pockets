@@ -107,6 +107,29 @@ public class PocketServiceImpl implements PocketService {
 
     @Override
     @Transactional
+    public void logManualDeduction(Long pocketId, BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAmountException("Amount must be greater than zero");
+        }
+        Pocket pocket = findPocketEntity(pocketId);
+
+        // Deduct from manualCurrentBalance directly (can go negative)
+        BigDecimal currentManual = pocket.getManualCurrentBalance() != null ? pocket.getManualCurrentBalance() : BigDecimal.ZERO;
+        pocket.setManualCurrentBalance(currentManual.subtract(amount));
+
+        // Deduct from currentBalance, clamping at 0 to respect DB check constraint
+        BigDecimal current = pocket.getCurrentBalance() != null ? pocket.getCurrentBalance() : BigDecimal.ZERO;
+        BigDecimal newCurrent = current.subtract(amount);
+        if (newCurrent.compareTo(BigDecimal.ZERO) < 0) {
+            newCurrent = BigDecimal.ZERO;
+        }
+        pocket.setCurrentBalance(newCurrent);
+
+        pocketRepository.save(pocket);
+    }
+
+    @Override
+    @Transactional
     public void resetBalance(Long pocketId) {
         resetBalance(pocketId, false);
     }
@@ -135,12 +158,13 @@ public class PocketServiceImpl implements PocketService {
         // Manual Reset Behavior vs Scheduled Reset Behavior:
         // When ignoreOverrideProtection = false (manual resets):
         // If a user manually edited their balance (lastManualOverrideAt != null) AND that edit occurred AFTER the last reset,
-        // we DO NOT overwrite currentBalance. However, we STILL update lastResetAt = now.
+        // we DO NOT overwrite currentBalance or manualCurrentBalance. However, we STILL update lastResetAt = now.
         // EXPIRATION MECHANISM:
         // Updating lastResetAt to now ensures that during the NEXT reset cycle, lastResetAt (now) will be AFTER lastManualOverrideAt,
         // causing `lastManualOverrideAt.isAfter(lastResetAt)` to evaluate to false. Thus, override protection automatically expires after one cycle.
         if (!isOverrideProtected) {
             pocket.setCurrentBalance(pocket.getMonthlyLimit());
+            pocket.setManualCurrentBalance(pocket.getMonthlyLimit());
         }
 
         pocket.setLastResetAt(now);
@@ -177,6 +201,7 @@ public class PocketServiceImpl implements PocketService {
 
         Pocket pocket = findPocketEntityAndVerifyOwnership(pocketId, userId);
         pocket.setCurrentBalance(newBalance);
+        pocket.setManualCurrentBalance(newBalance);
         pocket.setLastManualOverrideAt(Instant.now());
         Pocket saved = pocketRepository.save(pocket);
         return PocketResponse.fromEntity(saved);

@@ -125,6 +125,33 @@ public class TransactionServiceImpl implements TransactionService {
                 .toList();
     }
 
+    @Override
+    @Transactional
+    public TransactionResponse logManualPurchase(Long userId, com.marsh.pockets.transaction.dto.LogPurchaseRequest request) {
+        if (request.amount() == null || request.amount().compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new com.marsh.pockets.common.exception.InvalidAmountException("Amount must be greater than zero");
+        }
+
+        // Verify the target pocket belongs to the authenticated user (throws ResourceNotFoundException if not)
+        pocketService.getPocketById(request.pocketId(), userId);
+
+        // Update pocket balances via logManualDeduction (can drive manualCurrentBalance negative)
+        pocketService.logManualDeduction(request.pocketId(), request.amount());
+
+        // Create transaction with source = MANUAL_LOG, status = CONFIRMED directly
+        Transaction transaction = new Transaction(
+            request.pocketId(),
+            userId,
+            request.amount(),
+            request.note(),
+            com.marsh.pockets.transaction.entity.TransactionSource.MANUAL_LOG,
+            TransactionStatus.CONFIRMED
+        );
+
+        Transaction saved = transactionRepository.save(transaction);
+        return TransactionResponse.fromEntity(saved);
+    }
+
     private Transaction findTransactionEntity(Long id) {
         return transactionRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Transaction not found with id: " + id));

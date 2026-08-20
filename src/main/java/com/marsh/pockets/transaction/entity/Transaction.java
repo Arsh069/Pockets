@@ -45,7 +45,11 @@ public class Transaction {
     @Column(name = "status", nullable = false)
     private TransactionStatus status;
 
-    @Column(name = "idempotency_key", nullable = false, unique = true)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source", nullable = false)
+    private TransactionSource source;
+
+    @Column(name = "idempotency_key", unique = true)
     private String idempotencyKey;
 
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -65,6 +69,16 @@ public class Transaction {
         this.note = note;
         this.idempotencyKey = idempotencyKey;
         this.status = TransactionStatus.PENDING;
+        this.source = TransactionSource.IN_APP;
+    }
+
+    public Transaction(Long pocketId, Long userId, BigDecimal amount, String note, TransactionSource source, TransactionStatus status) {
+        this.pocketId = pocketId;
+        this.userId = userId;
+        this.amount = amount;
+        this.note = note;
+        this.source = source;
+        this.status = status;
     }
 
     @PrePersist
@@ -74,6 +88,9 @@ public class Transaction {
         this.updatedAt = now;
         if (this.status == null) {
             this.status = TransactionStatus.PENDING;
+        }
+        if (this.source == null) {
+            this.source = TransactionSource.IN_APP;
         }
     }
 
@@ -136,6 +153,14 @@ public class Transaction {
 
     public void setStatus(TransactionStatus status) {
         this.status = status;
+    }
+
+    public TransactionSource getSource() {
+        return source;
+    }
+
+    public void setSource(TransactionSource source) {
+        this.source = source;
     }
 
     public String getIdempotencyKey() {

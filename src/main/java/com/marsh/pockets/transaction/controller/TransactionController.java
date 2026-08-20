@@ -35,6 +35,14 @@ public class TransactionController {
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
+    @PostMapping("/log")
+    public ResponseEntity<TransactionResponse> logManualPurchase(
+            @AuthenticationPrincipal Long userId,
+            @Valid @RequestBody com.marsh.pockets.transaction.dto.LogPurchaseRequest request) {
+        TransactionResponse response = transactionService.logManualPurchase(userId, request);
+        return new ResponseEntity<>(response, HttpStatus.CREATED);
+    }
+
     @PostMapping("/{id}/confirm")
     public ResponseEntity<TransactionResponse> confirmTransaction(
             @AuthenticationPrincipal Long userId,

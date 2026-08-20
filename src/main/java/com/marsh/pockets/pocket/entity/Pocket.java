@@ -9,6 +9,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.CheckConstraint;
+import jakarta.persistence.Version;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -24,6 +25,10 @@ public class Pocket {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
@@ -35,6 +40,9 @@ public class Pocket {
 
     @Column(name = "current_balance", nullable = false, precision = 19, scale = 4)
     private BigDecimal currentBalance;
+
+    @Column(name = "manual_current_balance", nullable = false, precision = 19, scale = 4)
+    private BigDecimal manualCurrentBalance;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -56,6 +64,7 @@ public class Pocket {
         this.name = name;
         this.monthlyLimit = monthlyLimit;
         this.currentBalance = BigDecimal.ZERO;
+        this.manualCurrentBalance = BigDecimal.ZERO;
     }
 
     @PrePersist
@@ -65,6 +74,9 @@ public class Pocket {
         this.updatedAt = now;
         if (this.currentBalance == null) {
             this.currentBalance = BigDecimal.ZERO;
+        }
+        if (this.manualCurrentBalance == null) {
+            this.manualCurrentBalance = this.currentBalance;
         }
     }
 
@@ -115,6 +127,14 @@ public class Pocket {
         this.currentBalance = currentBalance;
     }
 
+    public BigDecimal getManualCurrentBalance() {
+        return manualCurrentBalance;
+    }
+
+    public void setManualCurrentBalance(BigDecimal manualCurrentBalance) {
+        this.manualCurrentBalance = manualCurrentBalance;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
@@ -137,6 +157,14 @@ public class Pocket {
 
     public void setLastResetAt(Instant lastResetAt) {
         this.lastResetAt = lastResetAt;
+    }
+
+    public Long getVersion() {
+        return version;
+    }
+
+    public void setVersion(Long version) {
+        this.version = version;
     }
 
     public Instant getLastManualOverrideAt() {

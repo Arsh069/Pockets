@@ -1,6 +1,7 @@
 package com.marsh.pockets.transaction.dto;
 
 import com.marsh.pockets.transaction.entity.Transaction;
+import com.marsh.pockets.transaction.entity.TransactionSource;
 import com.marsh.pockets.transaction.entity.TransactionStatus;
 
 import java.math.BigDecimal;
@@ -14,6 +15,7 @@ public record TransactionResponse(
     String payeeUpiId,
     String note,
     TransactionStatus status,
+    TransactionSource source,
     String idempotencyKey,
     Instant createdAt,
     Instant updatedAt
@@ -27,6 +29,7 @@ public record TransactionResponse(
             transaction.getPayeeUpiId(),
             transaction.getNote(),
             transaction.getStatus(),
+            transaction.getSource(),
             transaction.getIdempotencyKey(),
             transaction.getCreatedAt(),
             transaction.getUpdatedAt()
