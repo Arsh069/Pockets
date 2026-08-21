@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.net.URLEncoder;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 
 @Service
@@ -45,7 +46,11 @@ public class PaymentLinkServiceImpl implements PaymentLinkService {
 
         StringBuilder uriBuilder = new StringBuilder("upi://pay?");
         uriBuilder.append("pa=").append(URLEncoder.encode(transaction.getPayeeUpiId().trim(), StandardCharsets.UTF_8));
-        uriBuilder.append("&am=").append(URLEncoder.encode(transaction.getAmount().toPlainString(), StandardCharsets.UTF_8));
+        if (transaction.getPayeeName() != null && !transaction.getPayeeName().trim().isEmpty()) {
+            uriBuilder.append("&pn=").append(URLEncoder.encode(transaction.getPayeeName().trim(), StandardCharsets.UTF_8));
+        }
+        String amount = transaction.getAmount().setScale(2, RoundingMode.UNNECESSARY).toPlainString();
+        uriBuilder.append("&am=").append(URLEncoder.encode(amount, StandardCharsets.UTF_8));
 
         if (transaction.getNote() != null && !transaction.getNote().trim().isEmpty()) {
             uriBuilder.append("&tn=").append(URLEncoder.encode(transaction.getNote().trim(), StandardCharsets.UTF_8));

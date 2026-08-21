@@ -38,8 +38,17 @@ public class Transaction {
     @Column(name = "payee_upi_id")
     private String payeeUpiId;
 
+    @Column(name = "payee_name")
+    private String payeeName;
+
     @Column(name = "note")
     private String note;
+
+    @Column(name = "raw_qr_payload", columnDefinition = "TEXT")
+    private String rawQrPayload;
+
+    @Column(name = "amount_locked", nullable = false)
+    private boolean amountLocked;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
@@ -51,6 +60,9 @@ public class Transaction {
 
     @Column(name = "idempotency_key", unique = true)
     private String idempotencyKey;
+
+    @Column(name = "expires_at")
+    private Instant expiresAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -137,6 +149,38 @@ public class Transaction {
 
     public void setPayeeUpiId(String payeeUpiId) {
         this.payeeUpiId = payeeUpiId;
+    }
+
+    public String getPayeeName() {
+        return payeeName;
+    }
+
+    public void setPayeeName(String payeeName) {
+        this.payeeName = payeeName;
+    }
+
+    public String getRawQrPayload() {
+        return rawQrPayload;
+    }
+
+    public void setRawQrPayload(String rawQrPayload) {
+        this.rawQrPayload = rawQrPayload;
+    }
+
+    public boolean isAmountLocked() {
+        return amountLocked;
+    }
+
+    public void setAmountLocked(boolean amountLocked) {
+        this.amountLocked = amountLocked;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(Instant expiresAt) {
+        this.expiresAt = expiresAt;
     }
 
     public String getNote() {

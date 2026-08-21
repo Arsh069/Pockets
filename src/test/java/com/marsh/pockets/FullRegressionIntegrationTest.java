@@ -15,7 +15,6 @@ import com.marsh.pockets.pocket.repository.PocketRepository;
 import com.marsh.pockets.pocket.service.PocketService;
 import com.marsh.pockets.transaction.dto.CreateTransactionRequest;
 import com.marsh.pockets.transaction.dto.TransactionResponse;
-import com.marsh.pockets.transaction.entity.TransactionStatus;
 import com.marsh.pockets.transaction.repository.TransactionRepository;
 import com.marsh.pockets.transaction.service.TransactionService;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,7 +32,6 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
@@ -592,5 +590,194 @@ class FullRegressionIntegrationTest {
                 org.springframework.dao.OptimisticLockingFailureException.class,
                 () -> pocketRepository.saveAndFlush(stalePocket)
         );
+    }
+
+    @Test
+    @DisplayName("QR-based Payment: Server-side trust overrides client-supplied fields when QR payload is present")
+    void testQrBasedPaymentServerTrustValidation() throws Exception {
+        AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
+        String tokenA = "Bearer " + userA.accessToken();
+
+        // Create and fund pocket with 2000.00
+        CreatePocketRequest createPocket = new CreatePocketRequest("Dining", new BigDecimal("5000.00"));
+        MvcResult pocketResult = mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createPocket)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        PocketResponse pocket = objectMapper.readValue(pocketResult.getResponse().getContentAsString(), PocketResponse.class);
+
+        OverrideBalanceRequest overrideReq = new OverrideBalanceRequest(new BigDecimal("2000.00"));
+        mockMvc.perform(patch("/api/pockets/" + pocket.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(overrideReq)))
+                .andExpect(status().isOk());
+
+        // Scenario 1: QR with fixed amount and merchant name.
+        // Client attempts tampering by sending amount = 1.00 and payeeUpiId = hacker@upi.
+        // Backend MUST ignore client values and trust QR payload.
+        String qrWithAmount = "upi://pay?pa=trustedstore@okaxis&pn=Trusted+Store&am=450.00&tn=Dinner+Bill";
+        CreateTransactionRequest tamperedReq = new CreateTransactionRequest(
+                pocket.id(),
+                new BigDecimal("1.00"), // Tampered client amount
+                "hacker@upi",           // Tampered client payee
+                "Tampered note",
+                UUID.randomUUID().toString(),
+                qrWithAmount
+        );
+
+        MvcResult txResult1 = mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(tamperedReq)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.amount").value(450.0))
+                .andExpect(jsonPath("$.payeeUpiId").value("trustedstore@okaxis"))
+                .andExpect(jsonPath("$.payeeName").value("Trusted Store"))
+                .andExpect(jsonPath("$.amountLocked").value(true))
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn();
+        TransactionResponse tx1 = objectMapper.readValue(txResult1.getResponse().getContentAsString(), TransactionResponse.class);
+        assertNotNull(tx1.expiresAt());
+
+        // UPI deep link generation now includes &pn=
+        com.marsh.pockets.payment.dto.GenerateLinkRequest linkReq =
+                new com.marsh.pockets.payment.dto.GenerateLinkRequest(tx1.id());
+        MvcResult linkResult = mockMvc.perform(post("/api/payments/generate-link")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(linkReq)))
+                .andExpect(status().isOk())
+                .andReturn();
+        com.marsh.pockets.payment.dto.GenerateLinkResponse linkResponse =
+                objectMapper.readValue(linkResult.getResponse().getContentAsString(), com.marsh.pockets.payment.dto.GenerateLinkResponse.class);
+        assertTrue(linkResponse.upiDeepLink().contains("pa=trustedstore%40okaxis"));
+        assertTrue(linkResponse.upiDeepLink().contains("pn=Trusted+Store"));
+        assertTrue(linkResponse.upiDeepLink().contains("am=450.00"));
+
+        // Scenario 2: QR without amount (dynamic amount QR).
+        // Backend takes payee and name from QR, but amount from client request, amountLocked = false.
+        String dynamicQr = "upi://pay?pa=teastall@upi&pn=Tea+Stall";
+        CreateTransactionRequest dynamicReq = new CreateTransactionRequest(
+                pocket.id(),
+                new BigDecimal("60.00"),
+                null,
+                "Chai & samosa",
+                UUID.randomUUID().toString(),
+                dynamicQr
+        );
+
+        mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(dynamicReq)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.amount").value(60.0))
+                .andExpect(jsonPath("$.payeeUpiId").value("teastall@upi"))
+                .andExpect(jsonPath("$.payeeName").value("Tea Stall"))
+                .andExpect(jsonPath("$.amountLocked").value(false));
+
+        // Scenario 3: Malformed QR payload returns 400 Bad Request
+        CreateTransactionRequest malformedReq = new CreateTransactionRequest(
+                pocket.id(),
+                new BigDecimal("50.00"),
+                "merchant@upi",
+                "Invalid QR",
+                UUID.randomUUID().toString(),
+                "https://not-a-upi-qr.com/pay"
+        );
+        mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(malformedReq)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Transaction Expiry: Expired PENDING transactions cannot be confirmed and are marked EXPIRED")
+    void testTransactionExpiryBehavior() throws Exception {
+        AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
+        String tokenA = "Bearer " + userA.accessToken();
+
+        // Create and fund pocket
+        CreatePocketRequest createPocket = new CreatePocketRequest("Fuel", new BigDecimal("5000.00"));
+        MvcResult pocketResult = mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createPocket)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        PocketResponse pocket = objectMapper.readValue(pocketResult.getResponse().getContentAsString(), PocketResponse.class);
+
+        OverrideBalanceRequest overrideReq = new OverrideBalanceRequest(new BigDecimal("1000.00"));
+        mockMvc.perform(patch("/api/pockets/" + pocket.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(overrideReq)))
+                .andExpect(status().isOk());
+
+        // Create transaction
+        CreateTransactionRequest txReq1 = new CreateTransactionRequest(
+                pocket.id(),
+                new BigDecimal("200.00"),
+                "petrolpump@upi",
+                "Petrol",
+                UUID.randomUUID().toString()
+        );
+        MvcResult txResult1 = mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(txReq1)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        TransactionResponse tx1 = objectMapper.readValue(txResult1.getResponse().getContentAsString(), TransactionResponse.class);
+
+        // Manually expire transaction 1 by setting expiresAt in past
+        com.marsh.pockets.transaction.entity.Transaction entity1 = transactionRepository.findById(tx1.id()).orElseThrow();
+        entity1.setExpiresAt(java.time.Instant.now().minusSeconds(60));
+        transactionRepository.save(entity1);
+
+        // Confirming expired transaction fails with 409 Conflict
+        mockMvc.perform(post("/api/transactions/" + tx1.id() + "/confirm")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This payment request has expired, please create a new one"));
+
+        // Status must now be EXPIRED in DB
+        com.marsh.pockets.transaction.entity.Transaction expiredEntity = transactionRepository.findById(tx1.id()).orElseThrow();
+        assertEquals(com.marsh.pockets.transaction.entity.TransactionStatus.EXPIRED, expiredEntity.getStatus());
+
+        // Pocket balance must not have been deducted (remains 1000.00)
+        mockMvc.perform(get("/api/pockets/" + pocket.id())
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentBalance").value(1000.0));
+
+        // Create transaction 2 and cancel it after it expires -> status becomes EXPIRED
+        CreateTransactionRequest txReq2 = new CreateTransactionRequest(
+                pocket.id(),
+                new BigDecimal("100.00"),
+                "diesel@upi",
+                "Diesel",
+                UUID.randomUUID().toString()
+        );
+        MvcResult txResult2 = mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(txReq2)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        TransactionResponse tx2 = objectMapper.readValue(txResult2.getResponse().getContentAsString(), TransactionResponse.class);
+
+        com.marsh.pockets.transaction.entity.Transaction entity2 = transactionRepository.findById(tx2.id()).orElseThrow();
+        entity2.setExpiresAt(java.time.Instant.now().minusSeconds(10));
+        transactionRepository.save(entity2);
+
+        mockMvc.perform(post("/api/transactions/" + tx2.id() + "/cancel")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXPIRED"));
     }
 }

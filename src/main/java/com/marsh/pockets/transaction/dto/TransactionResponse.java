@@ -13,10 +13,14 @@ public record TransactionResponse(
     Long userId,
     BigDecimal amount,
     String payeeUpiId,
+    String payeeName,
     String note,
+    String rawQrPayload,
+    boolean amountLocked,
     TransactionStatus status,
     TransactionSource source,
     String idempotencyKey,
+    Instant expiresAt,
     Instant createdAt,
     Instant updatedAt
 ) {
@@ -27,10 +31,14 @@ public record TransactionResponse(
             transaction.getUserId(),
             transaction.getAmount(),
             transaction.getPayeeUpiId(),
+            transaction.getPayeeName(),
             transaction.getNote(),
+            transaction.getRawQrPayload(),
+            transaction.isAmountLocked(),
             transaction.getStatus(),
             transaction.getSource(),
             transaction.getIdempotencyKey(),
+            transaction.getExpiresAt(),
             transaction.getCreatedAt(),
             transaction.getUpdatedAt()
         );
