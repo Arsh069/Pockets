@@ -16,4 +16,6 @@ public interface TransactionService {
     TransactionResponse getTransaction(Long id, Long userId);
 
     List<TransactionResponse> listTransactions(Long userId, Long pocketId);
+
+    TransactionResponse logManualPurchase(Long userId, com.marsh.pockets.transaction.dto.LogPurchaseRequest request);
 }

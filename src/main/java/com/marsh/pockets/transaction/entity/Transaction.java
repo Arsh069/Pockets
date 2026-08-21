@@ -38,15 +38,31 @@ public class Transaction {
     @Column(name = "payee_upi_id")
     private String payeeUpiId;
 
+    @Column(name = "payee_name")
+    private String payeeName;
+
     @Column(name = "note")
     private String note;
+
+    @Column(name = "raw_qr_payload", columnDefinition = "TEXT")
+    private String rawQrPayload;
+
+    @Column(name = "amount_locked", nullable = false)
+    private boolean amountLocked;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private TransactionStatus status;
 
-    @Column(name = "idempotency_key", nullable = false, unique = true)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source", nullable = false)
+    private TransactionSource source;
+
+    @Column(name = "idempotency_key", unique = true)
     private String idempotencyKey;
+
+    @Column(name = "expires_at")
+    private Instant expiresAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -65,6 +81,16 @@ public class Transaction {
         this.note = note;
         this.idempotencyKey = idempotencyKey;
         this.status = TransactionStatus.PENDING;
+        this.source = TransactionSource.IN_APP;
+    }
+
+    public Transaction(Long pocketId, Long userId, BigDecimal amount, String note, TransactionSource source, TransactionStatus status) {
+        this.pocketId = pocketId;
+        this.userId = userId;
+        this.amount = amount;
+        this.note = note;
+        this.source = source;
+        this.status = status;
     }
 
     @PrePersist
@@ -74,6 +100,9 @@ public class Transaction {
         this.updatedAt = now;
         if (this.status == null) {
             this.status = TransactionStatus.PENDING;
+        }
+        if (this.source == null) {
+            this.source = TransactionSource.IN_APP;
         }
     }
 
@@ -122,6 +151,38 @@ public class Transaction {
         this.payeeUpiId = payeeUpiId;
     }
 
+    public String getPayeeName() {
+        return payeeName;
+    }
+
+    public void setPayeeName(String payeeName) {
+        this.payeeName = payeeName;
+    }
+
+    public String getRawQrPayload() {
+        return rawQrPayload;
+    }
+
+    public void setRawQrPayload(String rawQrPayload) {
+        this.rawQrPayload = rawQrPayload;
+    }
+
+    public boolean isAmountLocked() {
+        return amountLocked;
+    }
+
+    public void setAmountLocked(boolean amountLocked) {
+        this.amountLocked = amountLocked;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(Instant expiresAt) {
+        this.expiresAt = expiresAt;
+    }
+
     public String getNote() {
         return note;
     }
@@ -136,6 +197,14 @@ public class Transaction {
 
     public void setStatus(TransactionStatus status) {
         this.status = status;
+    }
+
+    public TransactionSource getSource() {
+        return source;
+    }
+
+    public void setSource(TransactionSource source) {
+        this.source = source;
     }
 
     public String getIdempotencyKey() {

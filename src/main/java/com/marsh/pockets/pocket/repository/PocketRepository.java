@@ -16,6 +16,6 @@ public interface PocketRepository extends JpaRepository<Pocket, Long> {
     List<Pocket> findByUserId(Long userId);
 
     @Modifying
-    @Query("UPDATE Pocket p SET p.currentBalance = p.currentBalance - :amount WHERE p.id = :id AND p.currentBalance >= :amount")
+    @Query("UPDATE Pocket p SET p.currentBalance = p.currentBalance - :amount, p.manualCurrentBalance = p.manualCurrentBalance - :amount, p.version = p.version + 1 WHERE p.id = :id AND p.currentBalance >= :amount")
     int deductBalanceAtomic(@Param("id") Long id, @Param("amount") BigDecimal amount);
 }

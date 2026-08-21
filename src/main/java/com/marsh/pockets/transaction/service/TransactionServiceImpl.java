@@ -1,6 +1,7 @@
 package com.marsh.pockets.transaction.service;
 
 import com.marsh.pockets.common.exception.InsufficientBalanceException;
+import com.marsh.pockets.common.exception.InvalidAmountException;
 import com.marsh.pockets.common.exception.InvalidTransactionStateException;
 import com.marsh.pockets.common.exception.ResourceNotFoundException;
 import com.marsh.pockets.pocket.dto.BalanceCheckResponse;
@@ -8,11 +9,16 @@ import com.marsh.pockets.pocket.service.PocketService;
 import com.marsh.pockets.transaction.dto.CreateTransactionRequest;
 import com.marsh.pockets.transaction.dto.TransactionResponse;
 import com.marsh.pockets.transaction.entity.Transaction;
+import com.marsh.pockets.transaction.entity.TransactionSource;
 import com.marsh.pockets.transaction.entity.TransactionStatus;
 import com.marsh.pockets.transaction.repository.TransactionRepository;
+import com.marsh.pockets.transaction.util.UpiQrParser;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,10 +28,15 @@ public class TransactionServiceImpl implements TransactionService {
 
     private final TransactionRepository transactionRepository;
     private final PocketService pocketService;
+    private final long expiryMinutes;
 
-    public TransactionServiceImpl(TransactionRepository transactionRepository, PocketService pocketService) {
+    public TransactionServiceImpl(
+            TransactionRepository transactionRepository,
+            PocketService pocketService,
+            @Value("${transaction.expiry-minutes:10}") long expiryMinutes) {
         this.transactionRepository = transactionRepository;
         this.pocketService = pocketService;
+        this.expiryMinutes = expiryMinutes;
     }
 
     @Override
@@ -40,33 +51,87 @@ public class TransactionServiceImpl implements TransactionService {
             return TransactionResponse.fromEntity(existingTx);
         }
 
+        String resolvedPayeeUpiId;
+        BigDecimal resolvedAmount;
+        String resolvedPayeeName = null;
+        boolean amountLocked = false;
+        String rawQrPayload = request.rawQrPayload();
+
+        /*
+         * CRITICAL SECURITY RULE:
+         * Client-supplied amount and payeeUpiId are NEVER trusted when a rawQrPayload is present.
+         * A compromised or modified client could otherwise claim "amountLocked" in its own UI while
+         * sending a different amount or redirecting payment to a rogue payee UPI ID in the request body,
+         * without the backend having any way to detect the tampering.
+         * Therefore, the server-parsed QR payload is the absolute authority for payment destination and locked amounts.
+         */
+        if (rawQrPayload != null && !rawQrPayload.trim().isEmpty()) {
+            UpiQrParser.UpiQrPayload parsed = UpiQrParser.parse(rawQrPayload);
+            resolvedPayeeUpiId = parsed.payeeUpiId();
+            resolvedPayeeName = parsed.payeeName();
+
+            if (parsed.amount() != null) {
+                resolvedAmount = parsed.amount();
+                amountLocked = true;
+            } else {
+                resolvedAmount = request.amount();
+                amountLocked = false;
+            }
+        } else {
+            resolvedPayeeUpiId = request.payeeUpiId();
+            resolvedAmount = request.amount();
+            amountLocked = false;
+        }
+
+        if (resolvedAmount == null || resolvedAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAmountException("Amount must be greater than zero");
+        }
+
         // Verify the target pocket belongs to the authenticated user
         pocketService.getPocketById(request.pocketId(), userId);
 
-        BalanceCheckResponse balanceCheck = pocketService.checkBalance(request.pocketId(), userId, request.amount());
+        BalanceCheckResponse balanceCheck = pocketService.checkBalance(request.pocketId(), userId, resolvedAmount);
         if (!balanceCheck.sufficient()) {
             throw new InsufficientBalanceException(
-                "Insufficient balance in pocket " + request.pocketId() + " for requested amount " + request.amount()
+                "Insufficient balance in pocket " + request.pocketId() + " for requested amount " + resolvedAmount
             );
         }
 
         Transaction transaction = new Transaction(
             request.pocketId(),
             userId,
-            request.amount(),
-            request.payeeUpiId(),
+            resolvedAmount,
+            resolvedPayeeUpiId,
             request.note(),
             request.idempotencyKey()
         );
+        transaction.setPayeeName(resolvedPayeeName);
+        transaction.setRawQrPayload(rawQrPayload != null && !rawQrPayload.trim().isEmpty() ? rawQrPayload.trim() : null);
+        transaction.setAmountLocked(amountLocked);
+        transaction.setExpiresAt(Instant.now().plusSeconds(expiryMinutes * 60));
+        transaction.setSource(TransactionSource.IN_APP);
 
         Transaction saved = transactionRepository.save(transaction);
         return TransactionResponse.fromEntity(saved);
     }
 
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = {InvalidTransactionStateException.class, InsufficientBalanceException.class})
     public TransactionResponse confirmTransaction(Long id, Long userId) {
         Transaction transaction = findTransactionEntityAndVerifyOwnership(id, userId);
+
+        // Check if PENDING transaction has expired
+        if (transaction.getStatus() == TransactionStatus.PENDING
+                && transaction.getExpiresAt() != null
+                && transaction.getExpiresAt().isBefore(Instant.now())) {
+            transaction.setStatus(TransactionStatus.EXPIRED);
+            transactionRepository.save(transaction);
+            throw new InvalidTransactionStateException("This payment request has expired, please create a new one");
+        }
+
+        if (transaction.getStatus() == TransactionStatus.EXPIRED) {
+            throw new InvalidTransactionStateException("This payment request has expired, please create a new one");
+        }
 
         if (transaction.getStatus() == TransactionStatus.CONFIRMED) {
             return TransactionResponse.fromEntity(transaction);
@@ -101,7 +166,12 @@ public class TransactionServiceImpl implements TransactionService {
             );
         }
 
-        transaction.setStatus(TransactionStatus.CANCELLED);
+        if (transaction.getExpiresAt() != null && transaction.getExpiresAt().isBefore(Instant.now())) {
+            transaction.setStatus(TransactionStatus.EXPIRED);
+        } else {
+            transaction.setStatus(TransactionStatus.CANCELLED);
+        }
+
         Transaction saved = transactionRepository.save(transaction);
         return TransactionResponse.fromEntity(saved);
     }
@@ -123,6 +193,33 @@ public class TransactionServiceImpl implements TransactionService {
                 .stream()
                 .map(TransactionResponse::fromEntity)
                 .toList();
+    }
+
+    @Override
+    @Transactional
+    public TransactionResponse logManualPurchase(Long userId, com.marsh.pockets.transaction.dto.LogPurchaseRequest request) {
+        if (request.amount() == null || request.amount().compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new com.marsh.pockets.common.exception.InvalidAmountException("Amount must be greater than zero");
+        }
+
+        // Verify the target pocket belongs to the authenticated user (throws ResourceNotFoundException if not)
+        pocketService.getPocketById(request.pocketId(), userId);
+
+        // Update pocket balances via logManualDeduction (can drive manualCurrentBalance negative)
+        pocketService.logManualDeduction(request.pocketId(), request.amount());
+
+        // Create transaction with source = MANUAL_LOG, status = CONFIRMED directly
+        Transaction transaction = new Transaction(
+            request.pocketId(),
+            userId,
+            request.amount(),
+            request.note(),
+            com.marsh.pockets.transaction.entity.TransactionSource.MANUAL_LOG,
+            TransactionStatus.CONFIRMED
+        );
+
+        Transaction saved = transactionRepository.save(transaction);
+        return TransactionResponse.fromEntity(saved);
     }
 
     private Transaction findTransactionEntity(Long id) {
