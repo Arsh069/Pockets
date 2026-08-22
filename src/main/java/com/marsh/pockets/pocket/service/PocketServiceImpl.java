@@ -2,6 +2,7 @@ package com.marsh.pockets.pocket.service;
 
 import com.marsh.pockets.common.exception.InsufficientBalanceException;
 import com.marsh.pockets.common.exception.InvalidAmountException;
+import com.marsh.pockets.common.exception.InvalidTransactionStateException;
 import com.marsh.pockets.common.exception.ResourceNotFoundException;
 import com.marsh.pockets.pocket.dto.BalanceCheckResponse;
 import com.marsh.pockets.pocket.dto.CreatePocketRequest;
@@ -9,23 +10,29 @@ import com.marsh.pockets.pocket.dto.PocketResponse;
 import com.marsh.pockets.pocket.dto.UpdatePocketRequest;
 import com.marsh.pockets.pocket.entity.Pocket;
 import com.marsh.pockets.pocket.repository.PocketRepository;
+import com.marsh.pockets.transaction.entity.TransactionStatus;
+import com.marsh.pockets.transaction.repository.TransactionRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.List;
 
 @Service
 @Transactional(readOnly = true)
 public class PocketServiceImpl implements PocketService {
 
-    private final PocketRepository pocketRepository;
+    private static final Logger log = LoggerFactory.getLogger(PocketServiceImpl.class);
 
-    public PocketServiceImpl(PocketRepository pocketRepository) {
+    private final PocketRepository pocketRepository;
+    private final TransactionRepository transactionRepository;
+
+    public PocketServiceImpl(PocketRepository pocketRepository, TransactionRepository transactionRepository) {
         this.pocketRepository = pocketRepository;
+        this.transactionRepository = transactionRepository;
     }
 
     @Override
@@ -54,6 +61,11 @@ public class PocketServiceImpl implements PocketService {
     @Transactional
     public PocketResponse updatePocket(Long id, Long userId, UpdatePocketRequest request) {
         Pocket pocket = findPocketEntityAndVerifyOwnership(id, userId);
+
+        if (transactionRepository.existsByPocketIdAndStatus(id, TransactionStatus.PENDING)) {
+            throw new InvalidTransactionStateException("This pocket has a pending payment — confirm or cancel it first");
+        }
+
         pocket.setName(request.name());
         pocket.setMonthlyLimit(request.monthlyLimit());
         Pocket updated = pocketRepository.save(pocket);
@@ -64,6 +76,11 @@ public class PocketServiceImpl implements PocketService {
     @Transactional
     public void deletePocket(Long id, Long userId) {
         Pocket pocket = findPocketEntityAndVerifyOwnership(id, userId);
+
+        if (transactionRepository.existsByPocketIdAndStatus(id, TransactionStatus.PENDING)) {
+            throw new InvalidTransactionStateException("This pocket has a pending payment — confirm or cancel it first");
+        }
+
         pocketRepository.delete(pocket);
     }
 
@@ -131,42 +148,11 @@ public class PocketServiceImpl implements PocketService {
     @Override
     @Transactional
     public void resetBalance(Long pocketId) {
-        resetBalance(pocketId, false);
-    }
-
-    @Override
-    @Transactional
-    public void resetBalance(Long pocketId, boolean ignoreOverrideProtection) {
         Pocket pocket = findPocketEntity(pocketId);
         Instant now = Instant.now();
 
-        boolean isOverrideProtected = !ignoreOverrideProtection
-                && pocket.getLastManualOverrideAt() != null
-                && (pocket.getLastResetAt() == null || pocket.getLastManualOverrideAt().isAfter(pocket.getLastResetAt()));
-
-        // The scheduled job must be idempotent because it can be triggered more
-        // than once on the same day. Manual reset requests are allowed to run
-        // again immediately so the override-expiration flow can complete.
-        if (ignoreOverrideProtection && pocket.getLastResetAt() != null) {
-            LocalDate lastResetDate = LocalDate.ofInstant(pocket.getLastResetAt(), ZoneId.systemDefault());
-            LocalDate todayDate = LocalDate.ofInstant(now, ZoneId.systemDefault());
-            if (lastResetDate.equals(todayDate)) {
-                return;
-            }
-        }
-
-        // Manual Reset Behavior vs Scheduled Reset Behavior:
-        // When ignoreOverrideProtection = false (manual resets):
-        // If a user manually edited their balance (lastManualOverrideAt != null) AND that edit occurred AFTER the last reset,
-        // we DO NOT overwrite currentBalance or manualCurrentBalance. However, we STILL update lastResetAt = now.
-        // EXPIRATION MECHANISM:
-        // Updating lastResetAt to now ensures that during the NEXT reset cycle, lastResetAt (now) will be AFTER lastManualOverrideAt,
-        // causing `lastManualOverrideAt.isAfter(lastResetAt)` to evaluate to false. Thus, override protection automatically expires after one cycle.
-        if (!isOverrideProtected) {
-            pocket.setCurrentBalance(pocket.getMonthlyLimit());
-            pocket.setManualCurrentBalance(pocket.getMonthlyLimit());
-        }
-
+        pocket.setCurrentBalance(pocket.getMonthlyLimit());
+        pocket.setManualCurrentBalance(pocket.getMonthlyLimit());
         pocket.setLastResetAt(now);
         pocketRepository.save(pocket);
     }
@@ -175,7 +161,12 @@ public class PocketServiceImpl implements PocketService {
     @Transactional
     public PocketResponse resetBalanceForUser(Long pocketId, Long userId) {
         Pocket pocket = findPocketEntityAndVerifyOwnership(pocketId, userId);
-        resetBalance(pocket.getId(), false);
+
+        if (transactionRepository.existsByPocketIdAndStatus(pocketId, TransactionStatus.PENDING)) {
+            throw new InvalidTransactionStateException("This pocket has a pending payment — confirm or cancel it first");
+        }
+
+        resetBalance(pocket.getId());
         return PocketResponse.fromEntity(findPocketEntity(pocketId));
     }
 
@@ -183,9 +174,17 @@ public class PocketServiceImpl implements PocketService {
     @Transactional
     public List<PocketResponse> resetAllPocketsForUser(Long userId) {
         List<Pocket> pockets = pocketRepository.findByUserId(userId);
+        int skippedCount = 0;
         for (Pocket pocket : pockets) {
-            resetBalance(pocket.getId(), false);
+            if (transactionRepository.existsByPocketIdAndStatus(pocket.getId(), TransactionStatus.PENDING)) {
+                log.info("Skipping reset for pocket {} as it has a PENDING transaction", pocket.getId());
+                skippedCount++;
+                continue;
+            }
+            resetBalance(pocket.getId());
         }
+        log.info("Reset all pockets for user {}: total = {}, skipped with pending = {}", userId, pockets.size(), skippedCount);
+
         return pocketRepository.findByUserId(userId)
                 .stream()
                 .map(PocketResponse::fromEntity)
@@ -195,14 +194,19 @@ public class PocketServiceImpl implements PocketService {
     @Override
     @Transactional
     public PocketResponse overrideBalance(Long pocketId, Long userId, BigDecimal newBalance) {
-        if (newBalance == null || newBalance.compareTo(BigDecimal.ZERO) < 0) {
-            throw new InvalidAmountException("currentBalance must be greater than or equal to 0");
+        Pocket pocket = findPocketEntityAndVerifyOwnership(pocketId, userId);
+
+        if (transactionRepository.existsByPocketIdAndStatus(pocketId, TransactionStatus.PENDING)) {
+            throw new InvalidTransactionStateException("This pocket has a pending payment — confirm or cancel it first");
         }
 
-        Pocket pocket = findPocketEntityAndVerifyOwnership(pocketId, userId);
+        if (newBalance == null || newBalance.compareTo(BigDecimal.ZERO) < 0 || newBalance.compareTo(pocket.getMonthlyLimit()) > 0) {
+            String limitStr = pocket.getMonthlyLimit().stripTrailingZeros().toPlainString();
+            throw new IllegalArgumentException("Balance must be between 0 and the monthly limit (₹" + limitStr + ")");
+        }
+
         pocket.setCurrentBalance(newBalance);
         pocket.setManualCurrentBalance(newBalance);
-        pocket.setLastManualOverrideAt(Instant.now());
         Pocket saved = pocketRepository.save(pocket);
         return PocketResponse.fromEntity(saved);
     }

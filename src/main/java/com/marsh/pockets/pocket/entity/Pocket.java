@@ -53,9 +53,6 @@ public class Pocket {
     @Column(name = "last_reset_at")
     private Instant lastResetAt;
 
-    @Column(name = "last_manual_override_at")
-    private Instant lastManualOverrideAt;
-
     public Pocket() {
     }
 
@@ -63,8 +60,8 @@ public class Pocket {
         this.userId = userId;
         this.name = name;
         this.monthlyLimit = monthlyLimit;
-        this.currentBalance = BigDecimal.ZERO;
-        this.manualCurrentBalance = BigDecimal.ZERO;
+        this.currentBalance = monthlyLimit;
+        this.manualCurrentBalance = monthlyLimit;
     }
 
     @PrePersist
@@ -73,7 +70,7 @@ public class Pocket {
         this.createdAt = now;
         this.updatedAt = now;
         if (this.currentBalance == null) {
-            this.currentBalance = BigDecimal.ZERO;
+            this.currentBalance = this.monthlyLimit != null ? this.monthlyLimit : BigDecimal.ZERO;
         }
         if (this.manualCurrentBalance == null) {
             this.manualCurrentBalance = this.currentBalance;
@@ -165,13 +162,5 @@ public class Pocket {
 
     public void setVersion(Long version) {
         this.version = version;
-    }
-
-    public Instant getLastManualOverrideAt() {
-        return lastManualOverrideAt;
-    }
-
-    public void setLastManualOverrideAt(Instant lastManualOverrideAt) {
-        this.lastManualOverrideAt = lastManualOverrideAt;
     }
 }

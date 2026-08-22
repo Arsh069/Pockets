@@ -32,6 +32,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
@@ -42,8 +43,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.springframework.test.context.ActiveProfiles;
 
 @SpringBootTest
+@ActiveProfiles("test")
 class FullRegressionIntegrationTest {
 
     private MockMvc mockMvc;
@@ -295,18 +298,21 @@ class FullRegressionIntegrationTest {
     }
 
     @Test
-    @DisplayName("Monthly reset: Manual reset with override protection and expiration")
+    @DisplayName("Monthly reset: Manual reset resets balance to monthlyLimit (5000.00) and updates lastResetAt")
     void testMonthlyResetBehavior() throws Exception {
         AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
         String tokenA = "Bearer " + userA.accessToken();
 
-        // Create pocket with limit 5000 (starts at balance 0)
+        // Create pocket with limit 5000 (starts at monthlyLimit 5000)
         CreatePocketRequest createPocket = new CreatePocketRequest("Bills", new BigDecimal("5000.00"));
         MvcResult pocketResult = mockMvc.perform(post("/api/pockets")
                         .header("Authorization", tokenA)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(createPocket)))
                 .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.currentBalance").value(5000.0))
+                .andExpect(jsonPath("$.manualCurrentBalance").value(5000.0))
+                .andExpect(jsonPath("$.balance").value(5000.0))
                 .andReturn();
         PocketResponse pocket = objectMapper.readValue(pocketResult.getResponse().getContentAsString(), PocketResponse.class);
 
@@ -317,13 +323,17 @@ class FullRegressionIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(overrideReq)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.currentBalance").value(1234.0));
+                .andExpect(jsonPath("$.currentBalance").value(1234.0))
+                .andExpect(jsonPath("$.balance").value(1234.0));
 
-        // Manual reset should respect override protection -> balance remains 1234.00, lastResetAt updated
+        // Manual reset should reset currentBalance and manualCurrentBalance to monthlyLimit (5000.0)
         MvcResult resetResult1 = mockMvc.perform(post("/api/pockets/" + pocket.id() + "/reset")
                         .header("Authorization", tokenA))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.currentBalance").value(1234.0))
+                .andExpect(jsonPath("$.currentBalance").value(5000.0))
+                .andExpect(jsonPath("$.manualCurrentBalance").value(5000.0))
+                .andExpect(jsonPath("$.balance").value(5000.0))
+                .andExpect(jsonPath("$.overspentAmount").value(0.0))
                 .andReturn();
         PocketResponse resetPocket1 = objectMapper.readValue(resetResult1.getResponse().getContentAsString(), PocketResponse.class);
         assertNotNull(resetPocket1.lastResetAt());
@@ -369,33 +379,36 @@ class FullRegressionIntegrationTest {
 
         assertEquals(1, pocketRepository.findByUserId(userA.userId()).size());
         assertEquals(1, transactionRepository.findAllFiltered(null, userA.userId()).size());
+        assertFalse(refreshTokenRepository.findByUserId(userA.userId()).isEmpty());
 
         // Delete user directly from repository (simulating user removal)
         userRepository.deleteById(userA.userId());
 
-        // Pockets and transactions must be cascade-deleted at DB level
+        // Pockets, transactions, and refresh tokens must be cascade-deleted at DB level
         assertEquals(0, pocketRepository.findByUserId(userA.userId()).size());
         assertEquals(0, transactionRepository.findAllFiltered(null, userA.userId()).size());
+        assertTrue(refreshTokenRepository.findByUserId(userA.userId()).isEmpty());
     }
 
     @Test
-    @DisplayName("Part A: Manual Purchase Logging with dual-balance columns, negative balance, and displayBalance")
+    @DisplayName("Part A: Manual Purchase Logging with dual-balance columns, negative balance, and overspentAmount")
     void testManualPurchaseLoggingDualBalance() throws Exception {
         AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
         AuthResponse userB = registerUser("9876543211", "Password@123", "User B", 15);
         String tokenA = "Bearer " + userA.accessToken();
         String tokenB = "Bearer " + userB.accessToken();
 
-        // 1. Create pocket with limit 5000
+        // 1. Create pocket with limit 5000 (auto-funded to 5000)
         CreatePocketRequest createPocket = new CreatePocketRequest("Snacks", new BigDecimal("5000.00"));
         MvcResult pocketResult = mockMvc.perform(post("/api/pockets")
                         .header("Authorization", tokenA)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(createPocket)))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.currentBalance").value(0.0))
-                .andExpect(jsonPath("$.manualCurrentBalance").value(0.0))
-                .andExpect(jsonPath("$.displayBalance").value(0.0))
+                .andExpect(jsonPath("$.currentBalance").value(5000.0))
+                .andExpect(jsonPath("$.manualCurrentBalance").value(5000.0))
+                .andExpect(jsonPath("$.balance").value(5000.0))
+                .andExpect(jsonPath("$.overspentAmount").value(0.0))
                 .andReturn();
         PocketResponse pocket = objectMapper.readValue(pocketResult.getResponse().getContentAsString(), PocketResponse.class);
 
@@ -408,7 +421,8 @@ class FullRegressionIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentBalance").value(1000.0))
                 .andExpect(jsonPath("$.manualCurrentBalance").value(1000.0))
-                .andExpect(jsonPath("$.displayBalance").value(1000.0));
+                .andExpect(jsonPath("$.balance").value(1000.0))
+                .andExpect(jsonPath("$.overspentAmount").value(0.0));
 
         // 3. User B cannot log purchase on User A's pocket -> 404
         com.marsh.pockets.transaction.dto.LogPurchaseRequest logReqUserB =
@@ -419,7 +433,7 @@ class FullRegressionIntegrationTest {
                         .content(objectMapper.writeValueAsString(logReqUserB)))
                 .andExpect(status().isNotFound());
 
-        // 4. Log manual purchase of 400.00 -> currentBalance = 600, manualCurrentBalance = 600, displayBalance = 600
+        // 4. Log manual purchase of 400.00 -> currentBalance = 600, manualCurrentBalance = 600, balance = 600, overspentAmount = 0
         com.marsh.pockets.transaction.dto.LogPurchaseRequest logReq1 =
                 new com.marsh.pockets.transaction.dto.LogPurchaseRequest(pocket.id(), new BigDecimal("400.00"), "Coffee & snacks");
         mockMvc.perform(post("/api/transactions/log")
@@ -436,9 +450,10 @@ class FullRegressionIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentBalance").value(600.0))
                 .andExpect(jsonPath("$.manualCurrentBalance").value(600.0))
-                .andExpect(jsonPath("$.displayBalance").value(600.0));
+                .andExpect(jsonPath("$.balance").value(600.0))
+                .andExpect(jsonPath("$.overspentAmount").value(0.0));
 
-        // 5. Log manual purchase of 800.00 (exceeding 600) -> currentBalance clamped at 0, manualCurrentBalance becomes -200, displayBalance becomes -200
+        // 5. Log manual purchase of 800.00 (exceeding 600) -> currentBalance clamped at 0, manualCurrentBalance becomes -200, balance = 0, overspentAmount = 200
         com.marsh.pockets.transaction.dto.LogPurchaseRequest logReq2 =
                 new com.marsh.pockets.transaction.dto.LogPurchaseRequest(pocket.id(), new BigDecimal("800.00"), "Big dinner");
         mockMvc.perform(post("/api/transactions/log")
@@ -454,7 +469,8 @@ class FullRegressionIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentBalance").value(0.0))
                 .andExpect(jsonPath("$.manualCurrentBalance").value(-200.0))
-                .andExpect(jsonPath("$.displayBalance").value(-200.0));
+                .andExpect(jsonPath("$.balance").value(0.0))
+                .andExpect(jsonPath("$.overspentAmount").value(200.0));
     }
 
     @Test
@@ -657,6 +673,11 @@ class FullRegressionIntegrationTest {
         assertTrue(linkResponse.upiDeepLink().contains("pn=Trusted+Store"));
         assertTrue(linkResponse.upiDeepLink().contains("am=450.00"));
 
+        // Confirm tx1 to release pocket lock for next scenario
+        mockMvc.perform(post("/api/transactions/" + tx1.id() + "/confirm")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk());
+
         // Scenario 2: QR without amount (dynamic amount QR).
         // Backend takes payee and name from QR, but amount from client request, amountLocked = false.
         String dynamicQr = "upi://pay?pa=teastall@upi&pn=Tea+Stall";
@@ -669,7 +690,7 @@ class FullRegressionIntegrationTest {
                 dynamicQr
         );
 
-        mockMvc.perform(post("/api/transactions")
+        MvcResult dynamicResult = mockMvc.perform(post("/api/transactions")
                         .header("Authorization", tokenA)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(dynamicReq)))
@@ -677,7 +698,14 @@ class FullRegressionIntegrationTest {
                 .andExpect(jsonPath("$.amount").value(60.0))
                 .andExpect(jsonPath("$.payeeUpiId").value("teastall@upi"))
                 .andExpect(jsonPath("$.payeeName").value("Tea Stall"))
-                .andExpect(jsonPath("$.amountLocked").value(false));
+                .andExpect(jsonPath("$.amountLocked").value(false))
+                .andReturn();
+        TransactionResponse dynamicTx = objectMapper.readValue(dynamicResult.getResponse().getContentAsString(), TransactionResponse.class);
+
+        // Confirm dynamicTx to release pocket lock for next test
+        mockMvc.perform(post("/api/transactions/" + dynamicTx.id() + "/confirm")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk());
 
         // Scenario 3: Malformed QR payload returns 400 Bad Request
         CreateTransactionRequest malformedReq = new CreateTransactionRequest(
@@ -779,5 +807,179 @@ class FullRegressionIntegrationTest {
                         .header("Authorization", tokenA))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("EXPIRED"));
+    }
+
+    @Test
+    @DisplayName("Pocket Lock: PENDING transaction blocks reset, override, update, manual log, and new transaction")
+    void testPendingTransactionLockingBehavior() throws Exception {
+        AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
+        String tokenA = "Bearer " + userA.accessToken();
+
+        // 1. Create two pockets
+        CreatePocketRequest createPocket1 = new CreatePocketRequest("Dining", new BigDecimal("5000.00"));
+        MvcResult pocketResult1 = mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createPocket1)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        PocketResponse pocket1 = objectMapper.readValue(pocketResult1.getResponse().getContentAsString(), PocketResponse.class);
+
+        CreatePocketRequest createPocket2 = new CreatePocketRequest("Entertainment", new BigDecimal("3000.00"));
+        MvcResult pocketResult2 = mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createPocket2)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        PocketResponse pocket2 = objectMapper.readValue(pocketResult2.getResponse().getContentAsString(), PocketResponse.class);
+
+        // Fund both pockets
+        mockMvc.perform(patch("/api/pockets/" + pocket1.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new OverrideBalanceRequest(new BigDecimal("2000.00")))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/pockets/" + pocket2.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new OverrideBalanceRequest(new BigDecimal("1500.00")))))
+                .andExpect(status().isOk());
+
+        // 2. Create a PENDING transaction on pocket 1
+        CreateTransactionRequest txReq = new CreateTransactionRequest(
+                pocket1.id(),
+                new BigDecimal("500.00"),
+                "merchant@upi",
+                "Dinner",
+                UUID.randomUUID().toString()
+        );
+        MvcResult txResult = mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(txReq)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn();
+        TransactionResponse pendingTx = objectMapper.readValue(txResult.getResponse().getContentAsString(), TransactionResponse.class);
+
+        // 3. Verify that mutating pocket1 is BLOCKED with 409 Conflict
+        // 3a. Single reset
+        mockMvc.perform(post("/api/pockets/" + pocket1.id() + "/reset")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This pocket has a pending payment — confirm or cancel it first"));
+
+        // 3b. Override balance
+        mockMvc.perform(patch("/api/pockets/" + pocket1.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new OverrideBalanceRequest(new BigDecimal("1000.00")))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This pocket has a pending payment — confirm or cancel it first"));
+
+        // 3c. Edit pocket
+        mockMvc.perform(put("/api/pockets/" + pocket1.id())
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new UpdatePocketRequest("Dining Out", new BigDecimal("6000.00")))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This pocket has a pending payment — confirm or cancel it first"));
+
+        // 3d. Manual purchase log
+        mockMvc.perform(post("/api/transactions/log")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new com.marsh.pockets.transaction.dto.LogPurchaseRequest(pocket1.id(), new BigDecimal("100.00"), "Snack"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This pocket has a pending payment — confirm or cancel it first"));
+
+        // 3e. New in-app transaction on pocket 1
+        mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateTransactionRequest(pocket1.id(), new BigDecimal("200.00"), "other@upi", "Coffee", UUID.randomUUID().toString()))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This pocket has a pending payment — confirm or cancel it first"));
+
+        // 3f. Delete pocket
+        mockMvc.perform(delete("/api/pockets/" + pocket1.id())
+                        .header("Authorization", tokenA))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This pocket has a pending payment — confirm or cancel it first"));
+
+        // 4. Reset All should SKIP pocket1 (keeps balance 2000.0) but RESET pocket2 (balance becomes monthlyLimit 3000.0)
+        mockMvc.perform(post("/api/pockets/reset-all")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/pockets/" + pocket1.id())
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentBalance").value(2000.0));
+
+        mockMvc.perform(get("/api/pockets/" + pocket2.id())
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentBalance").value(3000.0));
+
+        // 5. Cancel the pending transaction -> lock is released
+        mockMvc.perform(post("/api/transactions/" + pendingTx.id() + "/cancel")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk());
+
+        // Now single reset on pocket1 succeeds (resets to monthlyLimit 5000.0)
+        mockMvc.perform(post("/api/pockets/" + pocket1.id() + "/reset")
+                        .header("Authorization", tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentBalance").value(5000.0));
+    }
+
+    @Test
+    @DisplayName("Validation: Upper bounds, balance limits, UPI format, and duplicate pocket names")
+    void testValidationBoundsAndUpiFormat() throws Exception {
+        AuthResponse userA = registerUser("9876543210", "Password@123", "User A", 15);
+        String tokenA = "Bearer " + userA.accessToken();
+
+        // 1. Create pocket with invalid upper bound monthlyLimit (> 15 digits) -> 400
+        mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Huge\",\"monthlyLimit\":10000000000000000}"))
+                .andExpect(status().isBadRequest());
+
+        // 2. Create valid pocket
+        CreatePocketRequest validPocket = new CreatePocketRequest("Health", new BigDecimal("5000.00"));
+        MvcResult pocketResult = mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validPocket)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        PocketResponse pocket = objectMapper.readValue(pocketResult.getResponse().getContentAsString(), PocketResponse.class);
+
+        // 3. Duplicate pocket name for same user -> 409 with clean message
+        mockMvc.perform(post("/api/pockets")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreatePocketRequest("health", new BigDecimal("2000.00")))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("A pocket with this name already exists"));
+
+        // 4. Override balance exceeding monthly limit (e.g. 6000 when limit is 5000) -> 400
+        mockMvc.perform(patch("/api/pockets/" + pocket.id() + "/balance")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new OverrideBalanceRequest(new BigDecimal("6000.00")))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Balance must be between 0 and the monthly limit (₹5000)"));
+
+        // 5. Invalid UPI ID format in transaction -> 400
+        mockMvc.perform(post("/api/transactions")
+                        .header("Authorization", tokenA)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateTransactionRequest(pocket.id(), new BigDecimal("100.00"), "invalid-upi-id", "Test", UUID.randomUUID().toString()))))
+                .andExpect(status().isBadRequest());
     }
 }

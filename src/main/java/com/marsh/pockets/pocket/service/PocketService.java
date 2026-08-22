@@ -30,8 +30,6 @@ public interface PocketService {
 
     void resetBalance(Long pocketId);
 
-    void resetBalance(Long pocketId, boolean ignoreOverrideProtection);
-
     PocketResponse resetBalanceForUser(Long pocketId, Long userId);
 
     List<PocketResponse> resetAllPocketsForUser(Long userId);

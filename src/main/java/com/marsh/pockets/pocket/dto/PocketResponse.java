@@ -12,16 +12,18 @@ public record PocketResponse(
     BigDecimal monthlyLimit,
     BigDecimal currentBalance,
     BigDecimal manualCurrentBalance,
-    BigDecimal displayBalance,
+    BigDecimal balance,
+    BigDecimal overspentAmount,
     Instant createdAt,
     Instant updatedAt,
-    Instant lastResetAt,
-    Instant lastManualOverrideAt
+    Instant lastResetAt
 ) {
     public static PocketResponse fromEntity(Pocket pocket) {
-        BigDecimal current = pocket.getCurrentBalance();
-        BigDecimal manual = pocket.getManualCurrentBalance();
-        BigDecimal display = (current != null && manual != null) ? current.min(manual) : current;
+        BigDecimal current = pocket.getCurrentBalance() != null ? pocket.getCurrentBalance() : BigDecimal.ZERO;
+        BigDecimal manual = pocket.getManualCurrentBalance() != null ? pocket.getManualCurrentBalance() : BigDecimal.ZERO;
+
+        BigDecimal balance = BigDecimal.ZERO.max(current);
+        BigDecimal overspent = manual.compareTo(BigDecimal.ZERO) < 0 ? manual.abs() : BigDecimal.ZERO;
 
         return new PocketResponse(
             pocket.getId(),
@@ -30,11 +32,11 @@ public record PocketResponse(
             pocket.getMonthlyLimit(),
             current,
             manual,
-            display,
+            balance,
+            overspent,
             pocket.getCreatedAt(),
             pocket.getUpdatedAt(),
-            pocket.getLastResetAt(),
-            pocket.getLastManualOverrideAt()
+            pocket.getLastResetAt()
         );
     }
 }

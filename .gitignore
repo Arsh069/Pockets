@@ -40,6 +40,8 @@ application-local.properties
 application-dev.properties
 application-prod.properties
 application-*.properties
+!src/test/resources/application.properties
+!src/test/resources/application-test.properties
 secrets.*
 *.pem
 *.key
@@ -67,6 +69,8 @@ Thumbs.db
 /target/
 /build/
 /.gradle/
+frontend/dist/
+frontend/node_modules/
 
 # Temporary files
 *.tmp

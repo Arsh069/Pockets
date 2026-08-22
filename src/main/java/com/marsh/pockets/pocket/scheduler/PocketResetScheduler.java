@@ -6,6 +6,8 @@ import com.marsh.pockets.common.util.PayDayUtil;
 import com.marsh.pockets.pocket.entity.Pocket;
 import com.marsh.pockets.pocket.repository.PocketRepository;
 import com.marsh.pockets.pocket.service.PocketService;
+import com.marsh.pockets.transaction.entity.TransactionStatus;
+import com.marsh.pockets.transaction.repository.TransactionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,14 +26,17 @@ public class PocketResetScheduler {
     private final UserRepository userRepository;
     private final PocketRepository pocketRepository;
     private final PocketService pocketService;
+    private final TransactionRepository transactionRepository;
 
     public PocketResetScheduler(
             UserRepository userRepository,
             PocketRepository pocketRepository,
-            PocketService pocketService) {
+            PocketService pocketService,
+            TransactionRepository transactionRepository) {
         this.userRepository = userRepository;
         this.pocketRepository = pocketRepository;
         this.pocketService = pocketService;
+        this.transactionRepository = transactionRepository;
     }
 
     @Scheduled(cron = "${pocket.reset.cron:0 0 2 * * *}")
@@ -50,6 +55,12 @@ public class PocketResetScheduler {
                 List<Pocket> pockets = pocketRepository.findByUserId(user.getId());
 
                 for (Pocket pocket : pockets) {
+                    if (transactionRepository.existsByPocketIdAndStatus(pocket.getId(), TransactionStatus.PENDING)) {
+                        log.warn("Skipping scheduled reset for pocket {} due to PENDING transaction", pocket.getId());
+                        pocketsSkipped++;
+                        continue;
+                    }
+
                     boolean alreadyResetToday = false;
                     if (pocket.getLastResetAt() != null) {
                         LocalDate lastResetDate = LocalDate.ofInstant(pocket.getLastResetAt(), ZoneId.systemDefault());
@@ -61,8 +72,7 @@ public class PocketResetScheduler {
                     if (alreadyResetToday) {
                         pocketsSkipped++;
                     } else {
-                        // Scheduled reset IGNORES manual override protection (ignoreOverrideProtection = true)
-                        pocketService.resetBalance(pocket.getId(), true);
+                        pocketService.resetBalance(pocket.getId());
                         pocketsReset++;
                     }
                 }

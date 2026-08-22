@@ -100,10 +100,15 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
     public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(org.springframework.dao.DataIntegrityViolationException ex) {
+        String rootMsg = ex.getRootCause() != null ? ex.getRootCause().getMessage() : ex.getMessage();
+        String message = "Database constraint violation: " + rootMsg;
+        if (rootMsg != null && (rootMsg.contains("uk_pockets_user_id_lower_name") || rootMsg.contains("pockets_user_id_lower_name"))) {
+            message = "A pocket with this name already exists";
+        }
         ErrorResponse errorResponse = new ErrorResponse(
             HttpStatus.CONFLICT.value(),
             "Conflict",
-            "Database constraint violation: " + (ex.getRootCause() != null ? ex.getRootCause().getMessage() : ex.getMessage())
+            message
         );
         return new ResponseEntity<>(errorResponse, HttpStatus.CONFLICT);
     }

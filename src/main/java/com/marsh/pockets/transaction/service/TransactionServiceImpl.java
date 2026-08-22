@@ -51,6 +51,10 @@ public class TransactionServiceImpl implements TransactionService {
             return TransactionResponse.fromEntity(existingTx);
         }
 
+        if (transactionRepository.existsByPocketIdAndStatus(request.pocketId(), TransactionStatus.PENDING)) {
+            throw new InvalidTransactionStateException("This pocket has a pending payment — confirm or cancel it first");
+        }
+
         String resolvedPayeeUpiId;
         BigDecimal resolvedAmount;
         String resolvedPayeeName = null;
@@ -79,6 +83,9 @@ public class TransactionServiceImpl implements TransactionService {
             }
         } else {
             resolvedPayeeUpiId = request.payeeUpiId();
+            if (resolvedPayeeUpiId == null || !resolvedPayeeUpiId.matches("^[\\w.\\-]{2,256}@[a-zA-Z]{2,64}$")) {
+                throw new IllegalArgumentException("payeeUpiId must be a valid UPI VPA format (e.g. name@bank)");
+            }
             resolvedAmount = request.amount();
             amountLocked = false;
         }
@@ -204,6 +211,10 @@ public class TransactionServiceImpl implements TransactionService {
 
         // Verify the target pocket belongs to the authenticated user (throws ResourceNotFoundException if not)
         pocketService.getPocketById(request.pocketId(), userId);
+
+        if (transactionRepository.existsByPocketIdAndStatus(request.pocketId(), TransactionStatus.PENDING)) {
+            throw new InvalidTransactionStateException("This pocket has a pending payment — confirm or cancel it first");
+        }
 
         // Update pocket balances via logManualDeduction (can drive manualCurrentBalance negative)
         pocketService.logManualDeduction(request.pocketId(), request.amount());
