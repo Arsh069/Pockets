@@ -1,0 +1,32 @@
+# Ignore environment and secret files
+.env
+.env.*
+secrets.*
+*.pem
+*.key
+*.crt
+
+# Ignore local commands with credentials / tokens
+src/main/commands.txt
+commands.txt
+
+# Ignore Git
+.git
+.gitignore
+
+# Ignore build artifacts
+target/
+build/
+*.class
+
+# Ignore Frontend (built/served separately)
+frontend/
+
+# Ignore IDE and OS metadata
+.idea
+*.iml
+.vscode
+.DS_Store
+Thumbs.db
+*.log
+logs/
