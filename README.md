@@ -12,6 +12,7 @@ DB_URL=jdbc:postgresql://localhost:5432/pockets_db
 DB_USERNAME=pockets_user
 DB_PASSWORD=your-local-database-password
 JWT_SECRET=generate-a-unique-secret-with-openssl-rand-hex-32
+FRONTEND_URL=http://localhost:5173
 TEST_DB_URL=jdbc:postgresql://localhost:5432/pockets_test_db
 TEST_DB_USERNAME=pockets_user
 TEST_DB_PASSWORD=your-local-test-password
