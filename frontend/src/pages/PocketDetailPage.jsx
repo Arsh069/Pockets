@@ -669,12 +669,12 @@ export const PocketDetailPage = () => {
 
       {/* SECTION 1: HEADER */}
       <div className="card" style={{ marginBottom: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div className="pocket-header-main">
           <div>
             <h1 style={{ fontSize: '1.75rem', fontWeight: 800, letterSpacing: '-0.03em' }}>{pocket.name}</h1>
 
             {/* Big prominent balance */}
-            <div className="tile-balance" style={{ fontSize: '3rem', margin: '8px 0 4px' }}>
+            <div className="tile-balance" style={{ margin: '8px 0 4px' }}>
               {formatCurrency(pocket.balance)}
             </div>
 
@@ -691,7 +691,7 @@ export const PocketDetailPage = () => {
             )}
           </div>
 
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div className="pocket-header-actions">
             <button
               onClick={() => {
                 setEditName(pocket.name);
@@ -717,7 +717,7 @@ export const PocketDetailPage = () => {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '12px', marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--color-border-subtle)' }}>
+        <div className="pocket-tools-row">
           <button
             onClick={handleResetPocket}
             className="btn btn-secondary btn-sm"
@@ -749,12 +749,12 @@ export const PocketDetailPage = () => {
 
         {activeTx && activeTx.status === 'PENDING' ? (
           /* Active Pending Transaction Card */
-          <div style={{ background: 'var(--color-surface-subtle)', borderRadius: 'var(--radius-lg)', padding: '24px', border: '1px solid var(--color-border)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div>
+          <div style={{ background: 'var(--color-surface-subtle)', borderRadius: 'var(--radius-lg)', padding: '20px', border: '1px solid var(--color-border)' }}>
+            <div className="tx-pending-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span className="badge badge-pending">PENDING APPROVAL</span>
                 {activeTx.amountLocked && (
-                  <span className="badge badge-locked" style={{ marginLeft: '8px' }}>
+                  <span className="badge badge-locked">
                     <Lock size={12} /> Merchant Locked
                   </span>
                 )}
@@ -835,7 +835,7 @@ export const PocketDetailPage = () => {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+              <div className="tx-pending-actions">
                 <button
                   onClick={() => handleConfirmPayment(activeTx.id)}
                   className="btn btn-secondary btn-block"
@@ -1049,7 +1049,7 @@ export const PocketDetailPage = () => {
           Already paid elsewhere? Log it here to keep this pocket's balance accurate.
         </p>
 
-        <form onSubmit={handleLogPurchase} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '16px', alignItems: 'flex-end' }}>
+        <form onSubmit={handleLogPurchase} className="log-purchase-form">
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">Amount (₹)</label>
             <input

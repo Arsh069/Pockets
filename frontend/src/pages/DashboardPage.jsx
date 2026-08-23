@@ -99,7 +99,7 @@ export const DashboardPage = () => {
   return (
     <div>
       {/* Dashboard Top Bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+      <div className="dashboard-header">
         <div>
           <h1 style={{ fontSize: '1.85rem', fontWeight: 800, letterSpacing: '-0.03em' }}>Your Pockets</h1>
           <p style={{ fontSize: '0.925rem', color: 'var(--color-text-secondary)', marginTop: '2px' }}>
@@ -107,7 +107,7 @@ export const DashboardPage = () => {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '12px' }}>
+        <div className="dashboard-header-actions">
           <button
             onClick={() => setIsResetConfirmOpen(true)}
             className="btn btn-secondary btn-sm"

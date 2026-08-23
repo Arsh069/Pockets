@@ -22,7 +22,7 @@ export const Navbar = () => {
 
       {user && (
         <div className="nav-actions">
-          <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-text-secondary)', marginRight: '8px' }}>
+          <span className="nav-user-label" style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-text-secondary)', marginRight: '4px' }}>
             {user.name || user.phoneNumber}
           </span>
           <button onClick={handleLogout} className="btn btn-ghost btn-sm" title="Log out">
