@@ -531,6 +531,19 @@ class FullRegressionIntegrationTest {
         assertTrue(linkResponse.upiDeepLink().contains("cu=INR"));
         assertTrue(linkResponse.upiDeepLink().contains("tr=" + tx.id()));
 
+        assertNotNull(linkResponse.iosAppLinks());
+        assertTrue(linkResponse.iosAppLinks().get("gpay").startsWith("gpay://upi/pay?pa=store%40okaxis&am=450.50"));
+        assertTrue(linkResponse.iosAppLinks().get("gpay").contains("cu=INR"));
+        assertTrue(linkResponse.iosAppLinks().get("gpay").contains("tr=" + tx.id()));
+
+        assertTrue(linkResponse.iosAppLinks().get("phonepe").startsWith("phonepe://upi/pay?pa=store%40okaxis&am=450.50"));
+        assertTrue(linkResponse.iosAppLinks().get("phonepe").contains("cu=INR"));
+        assertTrue(linkResponse.iosAppLinks().get("phonepe").contains("tr=" + tx.id()));
+
+        assertTrue(linkResponse.iosAppLinks().get("paytm").startsWith("paytmmp://pay?pa=store%40okaxis&am=450.50"));
+        assertTrue(linkResponse.iosAppLinks().get("paytm").contains("cu=INR"));
+        assertTrue(linkResponse.iosAppLinks().get("paytm").contains("tr=" + tx.id()));
+
         // 2. User B cannot generate link for User A's transaction -> 404
         mockMvc.perform(post("/api/payments/generate-link")
                         .header("Authorization", tokenB)

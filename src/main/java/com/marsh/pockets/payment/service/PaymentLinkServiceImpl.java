@@ -10,9 +10,11 @@ import com.marsh.pockets.transaction.repository.TransactionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.URLEncoder;
 import java.math.RoundingMode;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Service
 @Transactional(readOnly = true)
@@ -44,21 +46,34 @@ public class PaymentLinkServiceImpl implements PaymentLinkService {
             throw new IllegalArgumentException("payeeUpiId is required to generate a UPI deep link");
         }
 
-        StringBuilder uriBuilder = new StringBuilder("upi://pay?");
-        uriBuilder.append("pa=").append(URLEncoder.encode(transaction.getPayeeUpiId().trim(), StandardCharsets.UTF_8));
+        String queryParams = buildUpiQueryParams(transaction);
+
+        String genericUpiDeepLink = "upi://pay?" + queryParams;
+
+        Map<String, String> iosAppLinks = new LinkedHashMap<>();
+        iosAppLinks.put("gpay", "gpay://upi/pay?" + queryParams);
+        iosAppLinks.put("phonepe", "phonepe://upi/pay?" + queryParams);
+        iosAppLinks.put("paytm", "paytmmp://pay?" + queryParams);
+
+        return new GenerateLinkResponse(genericUpiDeepLink, iosAppLinks);
+    }
+
+    private String buildUpiQueryParams(Transaction transaction) {
+        StringBuilder query = new StringBuilder();
+        query.append("pa=").append(URLEncoder.encode(transaction.getPayeeUpiId().trim(), StandardCharsets.UTF_8));
         if (transaction.getPayeeName() != null && !transaction.getPayeeName().trim().isEmpty()) {
-            uriBuilder.append("&pn=").append(URLEncoder.encode(transaction.getPayeeName().trim(), StandardCharsets.UTF_8));
+            query.append("&pn=").append(URLEncoder.encode(transaction.getPayeeName().trim(), StandardCharsets.UTF_8));
         }
         String amount = transaction.getAmount().setScale(2, RoundingMode.UNNECESSARY).toPlainString();
-        uriBuilder.append("&am=").append(URLEncoder.encode(amount, StandardCharsets.UTF_8));
+        query.append("&am=").append(URLEncoder.encode(amount, StandardCharsets.UTF_8));
 
         if (transaction.getNote() != null && !transaction.getNote().trim().isEmpty()) {
-            uriBuilder.append("&tn=").append(URLEncoder.encode(transaction.getNote().trim(), StandardCharsets.UTF_8));
+            query.append("&tn=").append(URLEncoder.encode(transaction.getNote().trim(), StandardCharsets.UTF_8));
         }
 
-        uriBuilder.append("&cu=INR");
-        uriBuilder.append("&tr=").append(URLEncoder.encode(transaction.getId().toString(), StandardCharsets.UTF_8));
+        query.append("&cu=INR");
+        query.append("&tr=").append(URLEncoder.encode(transaction.getId().toString(), StandardCharsets.UTF_8));
 
-        return new GenerateLinkResponse(uriBuilder.toString());
+        return query.toString();
     }
 }

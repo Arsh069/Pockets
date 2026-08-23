@@ -103,7 +103,7 @@ export const DashboardPage = () => {
         <div>
           <h1 style={{ fontSize: '1.85rem', fontWeight: 800, letterSpacing: '-0.03em' }}>Your Pockets</h1>
           <p style={{ fontSize: '0.925rem', color: 'var(--color-text-secondary)', marginTop: '2px' }}>
-            Monzo-style budget envelopes for your UPI spending
+            Envelopes for your UPI spending
           </p>
         </div>
 
